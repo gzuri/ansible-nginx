@@ -1,0 +1,69 @@
+---
+- name: Install Nginx
+  apt: pkg=nginx state=installed update_cache=true
+  register: nginxinstalled
+  notify:
+    - Start Nginx
+
+- name: install letsencrypt
+  apt: name=letsencrypt state=latest
+  register: letsencryptinstalled
+
+- name: create letsencrypt directory
+  file: name=/var/www/letsencrypt state=directory
+
+- name: Disable Default Site
+  when: nginxinstalled|success
+  file: dest=/etc/nginx/sites-enabled/default state=absent
+
+
+- name: Add nginx Config
+  when: nginxinstalled|success
+  template: src=nginx.j2 dest=/etc/nginx/nginx.conf owner=root group=root
+
+
+- name: Install nginx site for letsencrypt requests
+  template:
+   src: templates/nginx-http.j2
+   dest: /etc/nginx/sites-available/http.conf
+
+
+- name: Enable letsencrypt  Site Config
+  register: createdsites
+  file: src=/etc/nginx/sites-available/http.conf dest=/etc/nginx/sites-enabled/http.conf state=link
+  notify:
+    - Reload Nginx
+
+- name: Create letsencrypt certificate
+  shell: letsencrypt certonly -n --webroot -w /var/www/letsencrypt -m {{ letsencrypt_email }} --agree-tos -d {{ domain }}
+  when: createdsites
+  args:
+   creates: /etc/letsencrypt/live/{{ domain }}
+
+- name: Generate dhparams
+  shell: openssl dhparam -out /etc/nginx/dhparams.pem 2048
+  args:
+   creates: /etc/nginx/dhparams.pem
+
+- name: Create Web root
+  when: nginxinstalled|success
+  register: createdsites
+  file: dest=/var/www/{{ domain }}/public mode=775 state=directory owner=www-data group=www-data
+  notify:
+    - Reload Nginx
+
+- name: Install nginx site for letsencrypt requests
+  template:
+   src: templates/site.j2
+   dest: /etc/nginx/sites-available/{{ domain }}.conf
+
+- name: Enable Site Config
+  file: src=/etc/nginx/sites-available/{{ domain }}.conf dest=/etc/nginx/sites-enabled/{{ domain }}.conf state=link
+  notify:
+    - Reload Nginx
+
+- name: Web Root Permissions
+  when: nginxinstalled|success
+  file: dest=/var/www/{{ domain }} mode=775 state=directory owner=www-data group=www-data recurse=yes
+  notify:
+    - Reload Nginx
